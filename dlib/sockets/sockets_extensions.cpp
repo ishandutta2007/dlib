@@ -258,6 +258,24 @@ namespace dlib
 
 // ----------------------------------------------------------------------------------------
 
+    connection* connect (
+        const std::string& path
+    )
+    {
+        connection* con;
+
+        if(create_connection(con,path))
+        {
+            std::ostringstream sout;
+            sout << "unable to connect to '" << path << "'";
+            throw socket_error(sout.str());
+        }
+
+        return con;
+    }
+
+// ----------------------------------------------------------------------------------------
+
     bool is_ip_address (
         std::string ip
     )

@@ -12,6 +12,7 @@
 #include <fcntl.h>
 #include "../set.h"
 #include <netinet/tcp.h>
+#include <sys/un.h>
 #include <string.h>
 
 
@@ -51,6 +52,29 @@ namespace dlib
 
 
 // ----------------------------------------------------------------------------------------
+
+    static void
+    close_socket (
+        int sock
+    )
+    /*!
+        requires
+            - sock == a socket
+        ensures
+            - sock has been closed
+    !*/
+    {
+        while (true)
+        {
+            int status = ::close(sock);
+            if (status == -1 && errno == EINTR)
+                continue;
+            break;
+        }
+    }
+
+// ----------------------------------------------------------------------------------------
+
 
     // lookup functions
 
@@ -302,10 +326,26 @@ namespace dlib
         const std::string& local_ip
     ) :
         connection_socket(sock),
-        connection_foreign_port(foreign_port),
-        connection_foreign_ip(foreign_ip),
-        connection_local_port(local_port),
-        connection_local_ip(local_ip),
+        info(in_place_tag<inet_info>{},
+            foreign_port,
+            foreign_ip,
+            local_port,
+            local_ip
+        ),
+        sd(false),
+        sdo(false),
+        sdr(0)
+    {}
+
+// ----------------------------------------------------------------------------------------
+
+    connection::
+    connection(
+        int sock,
+        const std::string& path
+    ) :
+        connection_socket(sock),
+        info(in_place_tag<unix_info>{}, path),
         sd(false),
         sdo(false),
         sdr(0)
@@ -481,13 +521,7 @@ namespace dlib
     ~connection (
     )        
     {
-        while (true)
-        {
-            int status = ::close(connection_socket);  
-            if (status == -1 && errno == EINTR)
-                continue;
-            break;
-        }
+        close_socket(connection_socket);
     }
 
 
@@ -504,9 +538,18 @@ namespace dlib
         const std::string& ip
     ) :
         listening_socket(sock),
-        listening_port(port),
-        listening_ip(ip),
-        inaddr_any(listening_ip.empty())
+        info(in_place_tag<inet_info>{}, ip, port)
+    {}
+
+// ----------------------------------------------------------------------------------------
+
+    listener::
+    listener(
+        int sock,
+        const std::string& path
+    ) :
+        listening_socket(sock),
+        info(in_place_tag<unix_info>{}, path)
     {}
 
 // ----------------------------------------------------------------------------------------
@@ -551,8 +594,8 @@ namespace dlib
     )
     {
         int incoming;
-        sockaddr_in incomingAddr;
-        dsocklen_t length = sizeof(sockaddr_in);
+        sockaddr_storage incomingAddr;
+        dsocklen_t length = sizeof(sockaddr_storage);
 
         // implement timeout with select if timeout is > 0
         if (timeout > 0)
@@ -673,90 +716,100 @@ namespace dlib
 
         }
 
-        
-        // get the port of the foreign host into foreign_port
-        int foreign_port = ntohs(incomingAddr.sin_port);
 
-        // get the IP of the foreign host into foreign_ip
-        char foreign_ip[16];
-        inet_ntop(AF_INET,&incomingAddr.sin_addr,foreign_ip,16);
-
-
-
-        // get the local ip for this connection into local_ip
-        char temp_local_ip[16];
-        std::string local_ip;
-        if (inaddr_any == true)
+        if (incomingAddr.ss_family == AF_INET)
         {
-            sockaddr_in local_info;
-            length = sizeof(sockaddr_in);
-            // get the local sockaddr_in structure associated with this new connection
-            if ( getsockname (
-                    incoming,
-                    reinterpret_cast<sockaddr*>(&local_info),
-                    &length
-                ) == -1
-            )
-            {   // an error occurred
-                while (true)
-                {
-                    int status = ::close(incoming);
-                    if (status == -1 && errno == EINTR)
-                        continue;
-                    break;
+            sockaddr_in& inet_addr = *reinterpret_cast<sockaddr_in*>(&incomingAddr);
+
+            // get the port of the foreign host into foreign_port
+            int foreign_port = ntohs(inet_addr.sin_port);
+
+            // get the IP of the foreign host into foreign_ip
+            char foreign_ip[16];
+            inet_ntop(AF_INET,&inet_addr.sin_addr,foreign_ip,16);
+
+
+
+            // get the local ip for this connection into local_ip
+            char temp_local_ip[16];
+            std::string local_ip;
+            if (info.cast_to<inet_info>().inaddr_any == true)
+            {
+                sockaddr_in local_info;
+                length = sizeof(sockaddr_in);
+                // get the local sockaddr_in structure associated with this new connection
+                if ( getsockname (
+                        incoming,
+                        reinterpret_cast<sockaddr*>(&local_info),
+                        &length
+                    ) == -1
+                )
+                {   // an error occurred
+                    close_socket(incoming);
+                    return OTHER_ERROR;
                 }
+                local_ip = const_cast<char*> (
+                    inet_ntop(AF_INET,&local_info.sin_addr,temp_local_ip,16)
+                    );
+            }
+            else
+            {
+                local_ip = info.cast_to<inet_info>().listening_ip;
+            }
+
+
+
+            // set the SO_OOBINLINE option
+            int flag_value = 1;
+            if (setsockopt(incoming,SOL_SOCKET,SO_OOBINLINE,reinterpret_cast<const void*>(&flag_value),sizeof(int)))
+            {
+                close_socket(incoming);
                 return OTHER_ERROR;
             }
-            local_ip = const_cast<char*> (
-                inet_ntop(AF_INET,&local_info.sin_addr,temp_local_ip,16)
-                );
-        }
-        else
-        {
-            local_ip = listening_ip;
-        }
 
 
 
-        // set the SO_OOBINLINE option
-        int flag_value = 1;
-        if (setsockopt(incoming,SOL_SOCKET,SO_OOBINLINE,reinterpret_cast<const void*>(&flag_value),sizeof(int)))
-        {
-            while (true)
+            // make a new connection object for this new connection
+            try
             {
-                int status = ::close(incoming);
-                if (status == -1 && errno == EINTR)
-                    continue;
-                break;
+                new_connection = new connection (
+                                        incoming,
+                                        foreign_port,
+                                        foreign_ip,
+                                        info.cast_to<inet_info>().listening_port,
+                                        local_ip
+                                    );
             }
-            return OTHER_ERROR;  
-        }
-
-
-
-        // make a new connection object for this new connection
-        try 
-        { 
-            new_connection = new connection (
-                                    incoming,
-                                    foreign_port,
-                                    foreign_ip,
-                                    listening_port,
-                                    local_ip
-                                ); 
-        }
-        catch (...) 
-        { 
-            while (true)
+            catch (...)
             {
-                int status = ::close(incoming);
-                if (status == -1 && errno == EINTR)
-                    continue;
-                break;
+                close_socket(incoming);
+                return OTHER_ERROR;
             }
-            return OTHER_ERROR; 
-        }
 
+        }
+        else if (incomingAddr.ss_family == AF_UNIX)
+        {
+            sockaddr_un& un_addr = *reinterpret_cast<sockaddr_un*>(&incomingAddr);
+            length = sizeof(sockaddr_un);
+
+            if (getsockname(
+                    incoming,
+                    reinterpret_cast<sockaddr*>(&un_addr),
+                    &length) == -1)
+            {   // an error occurred
+                close_socket(incoming);
+                return OTHER_ERROR;
+            }
+
+            std::string path(un_addr.sun_path);
+
+            // make a new connection object for this new connection
+            try { new_connection = new connection (incoming, path); }
+            catch (...) { close_socket(incoming); return OTHER_ERROR; }
+
+        } else {
+            return OTHER_ERROR;
+        }
         return 0;
     }
 
@@ -766,58 +819,18 @@ namespace dlib
 // ----------------------------------------------------------------------------------------
 // ----------------------------------------------------------------------------------------    
 
-    static void
-    close_socket (
-        int sock
-    )
-    /*! 
-        requires
-            - sock == a socket
-        ensures
-            - sock has been closed
-    !*/
-    {
-        while (true)
-        {
-            int status = ::close(sock);
-            if (status == -1 && errno == EINTR)
-                continue;
-            break;
-        }
-    }
-
-// ----------------------------------------------------------------------------------------    
-
-    int create_listener (
-        std::unique_ptr<listener>& new_listener,
-        unsigned short port,
-        const std::string& ip
-    )
-    {
-        new_listener.reset();
-        listener* temp;
-        int status = create_listener(temp,port,ip);
-
-        if (status == 0)
-            new_listener.reset(temp);
-
-        return status;
-    }
-
-    int create_listener (
-        listener*& new_listener,
+    int create_listening_socket (
+        connection::socket_descriptor_type& sock,
         unsigned short port,
         const std::string& ip
     )
     {
         sockets_startup();
 
-
         sockaddr_in sa;  // local socket structure
         memset(&sa,'\0',sizeof(sockaddr_in)); // initialize sa
-        
 
-        int sock = socket (AF_INET, SOCK_STREAM, 0);  // get a new socket
+        sock = socket (AF_INET, SOCK_STREAM, 0);  // get a new socket
 
         // if socket() returned an error then return OTHER_ERROR
         if (sock == -1)
@@ -825,11 +838,11 @@ namespace dlib
             return OTHER_ERROR;
         }
 
-        // set the local socket structure 
+        // set the local socket structure
         sa.sin_family = AF_INET;
         sa.sin_port = htons(port);
         if (ip.empty())
-        {            
+        {
             // if the listener should listen on any IP
             sa.sin_addr.s_addr = htons(INADDR_ANY);
         }
@@ -857,14 +870,14 @@ namespace dlib
 
         // bind the new socket to the requested port and ip
         if (bind(sock,reinterpret_cast<sockaddr*>(&sa),sizeof(sockaddr_in)) == -1)
-        {   // if there was an error 
-            close_socket(sock); 
+        {   // if there was an error
+            close_socket(sock);
 
             // if the port is already bound then return PORTINUSE
             if (errno == EADDRINUSE)
                 return PORTINUSE;
             else
-                return OTHER_ERROR;            
+                return OTHER_ERROR;
         }
 
 
@@ -872,14 +885,99 @@ namespace dlib
         if ( listen(sock,SOMAXCONN) == -1)
         {
             // if there was an error return OTHER_ERROR
-            close_socket(sock); 
+            close_socket(sock);
 
             // if the port is already bound then return PORTINUSE
             if (errno == EADDRINUSE)
                 return PORTINUSE;
             else
-                return OTHER_ERROR;   
+                return OTHER_ERROR;
         }
+
+        return 0;
+    }
+
+    int create_listening_socket (
+        connection::socket_descriptor_type& sock,
+        const std::string& path
+    )
+    {
+        sockets_startup();
+
+        sockaddr_un sa;  // local socket structure
+        memset(&sa,'\0',sizeof(sockaddr_un)); // initialize sa
+
+        if (path.empty() || sizeof(sa.sun_path) <= path.size())
+            return OTHER_ERROR;
+
+        sock = socket (AF_UNIX, SOCK_STREAM, 0);  // get a new socket
+
+        // if socket() returned an error then return OTHER_ERROR
+        if (sock == -1)
+        {
+            return OTHER_ERROR;
+        }
+
+        // set the local socket structure
+        sa.sun_family = AF_UNIX;
+        strncpy(sa.sun_path, path.c_str(), sizeof(sa.sun_path)-1);
+
+        // bind the new socket to the requested path
+        if (bind(sock,reinterpret_cast<sockaddr*>(&sa),sizeof(sockaddr_un)) == -1)
+        {   // if there was an error
+            close_socket(sock);
+
+            // if the port is already bound then return PORTINUSE
+            if (errno == EADDRINUSE)
+                return PORTINUSE;
+            else
+                return OTHER_ERROR;
+        }
+
+
+        // tell the new socket to listen
+        if ( listen(sock,SOMAXCONN) == -1)
+        {
+            // if there was an error return OTHER_ERROR
+            close_socket(sock);
+
+            // if the port is already bound then return PORTINUSE
+            if (errno == EADDRINUSE)
+                return PORTINUSE;
+            else
+                return OTHER_ERROR;
+        }
+
+        return 0;
+    }
+
+    int create_listener (
+        std::unique_ptr<listener>& new_listener,
+        unsigned short port,
+        const std::string& ip
+    )
+    {
+        new_listener.reset();
+        listener* temp;
+        int status = create_listener(temp,port,ip);
+
+        if (status == 0)
+            new_listener.reset(temp);
+
+        return status;
+    }
+
+    int create_listener (
+        listener*& new_listener,
+        unsigned short port,
+        const std::string& ip
+    )
+    {
+        sockets_startup();
+
+        int sock;
+        int error = create_listening_socket(sock, port, ip);
+        if (error < 0) return error;
 
         // determine the used local port if necessary
         if (port == 0)
@@ -901,6 +999,103 @@ namespace dlib
         // initialize a listener object on the heap with the new socket
         try { new_listener = new listener(sock,port,ip); }
         catch(...) { close_socket(sock); return OTHER_ERROR; }
+
+        return 0;
+    }
+
+    int create_listener (
+        std::unique_ptr<listener>& new_listener,
+        const std::string& path
+    )
+    {
+        new_listener.reset();
+        listener* temp;
+        int status = create_listener(temp,path);
+
+        if (status == 0)
+            new_listener.reset(temp);
+
+        return status;
+    }
+
+    int create_listener (
+        listener*& new_listener,
+        const std::string& path
+    )
+    {
+        sockets_startup();
+
+        int sock;
+        int error = create_listening_socket(sock, path);
+        if (error < 0) return error;
+
+        // initialize a listener object on the heap with the new socket
+        try { new_listener = new listener(sock,path); }
+        catch(...) { close_socket(sock); return OTHER_ERROR; }
+
+        return 0;
+    }
+
+    int create_listener_from_socket (
+        std::unique_ptr<listener>& new_listener,
+        connection::socket_descriptor_type sock
+    )
+    {
+        new_listener.reset();
+        listener* temp;
+        int status = create_listener_from_socket(temp, sock);
+
+        if (status == 0)
+            new_listener.reset(temp);
+
+        return status;
+    }
+
+    int create_listener_from_socket (
+        listener*& new_listener,
+        connection::socket_descriptor_type sock
+    )
+    {
+        if (sock < 0) return OTHER_ERROR;
+
+        sockets_startup();
+
+        sockaddr_storage sa;
+        dsocklen_t length = sizeof(sa);
+
+        if (getsockname(
+                sock,
+                reinterpret_cast<sockaddr*>(&sa),
+                &length) == -1)
+        {   // an error occurred
+            close_socket(sock);
+            return OTHER_ERROR;
+        }
+
+        if (sa.ss_family == AF_INET)
+        {
+            sockaddr_in& inet_addr = *reinterpret_cast<sockaddr_in*>(&sa);
+
+            int port = ntohs(inet_addr.sin_port);
+
+            char ip[16];
+            inet_ntop(AF_INET, &inet_addr.sin_addr, ip, sizeof(ip));
+
+            try { new_listener = new listener(sock, port, ip); }
+            catch(...) { close_socket(sock); return OTHER_ERROR; }
+        }
+        else if (sa.ss_family == AF_UNIX)
+        {
+            sockaddr_un& un_addr = *reinterpret_cast<sockaddr_un*>(&sa);
+
+            std::string path(un_addr.sun_path);
+            try { new_listener = new listener(sock, path); }
+            catch(...) { close_socket(sock); return OTHER_ERROR; }
+        }
+        else
+        {
+            return OTHER_ERROR;
+        }
 
         return 0;
     }
@@ -1100,6 +1295,73 @@ namespace dlib
         return 0;
     }
 
+    int create_connection (
+        std::unique_ptr<connection>& new_connection,
+        const std::string& path
+    )
+    {
+        new_connection.reset();
+        connection* temp;
+        int status = create_connection(temp, path);
+
+        if (status == 0)
+            new_connection.reset(temp);
+
+        return status;
+    }
+
+    int
+    create_connection (
+        connection*& new_connection,
+        const std::string& path
+    )
+    {
+        sockets_startup();
+
+        sockaddr_un sa;  // local socket structure
+        memset(&sa,'\0',sizeof(sockaddr_un)); // initialize sa
+
+        if (path.empty() || sizeof(sa.sun_path) <= path.size())
+            return OTHER_ERROR;
+
+        int sock = socket (AF_UNIX, SOCK_STREAM, 0);  // get a new socket
+
+        // if socket() returned an error then return OTHER_ERROR
+        if (sock == -1 )
+        {
+            return OTHER_ERROR;
+        }
+
+        // set up the local socket structure
+        sa.sun_family = AF_UNIX;
+        strncpy(sa.sun_path, path.c_str(), sizeof(sa.sun_path) - 1);
+
+        // connect the socket
+        if ( connect (
+                sock,
+                reinterpret_cast<sockaddr*>(&sa),
+                sizeof(sockaddr_un)
+            ) == -1
+        )
+        {
+            close_socket(sock);
+            // if the port is already bound then return PORTINUSE
+            if (errno == EADDRINUSE)
+                return PORTINUSE;
+            else
+                return OTHER_ERROR;
+        }
+
+        // initialize a connection object on the heap with the new socket
+        try
+        {
+            new_connection = new connection (sock, path);
+        }
+        catch(...) {close_socket(sock);  return OTHER_ERROR; }
+
+        return 0;
+    }
+
 // ----------------------------------------------------------------------------------------
 
 }
@@ -1107,4 +1369,3 @@ namespace dlib
 #endif // DLIB_POSIX
 
 #endif // DLIB_SOCKETS_KERNEL_2_CPp_
-

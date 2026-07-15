@@ -224,6 +224,22 @@ namespace dlib
 
 // ----------------------------------------------------------------------------------------
 
+    connection* connect (
+        const std::string& path
+    );
+    /*!
+        ensures
+            - returns a connection object that is connected to a unix socket created
+              at the given path
+        throws
+            - dlib::socket_error
+                This exception is thrown if there is some problem that prevents us from
+                creating the connection
+            - std::bad_alloc
+    !*/
+
+// ----------------------------------------------------------------------------------------
+
 
     bool is_ip_address (
         std::string ip

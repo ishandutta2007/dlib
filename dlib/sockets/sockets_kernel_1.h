@@ -15,6 +15,7 @@
 #include "../algs.h"
 #include "../threads.h"
 #include "../uintn.h"
+#include "../type_safe_union.h"
 
 
 namespace dlib
@@ -95,6 +96,11 @@ namespace dlib
             const std::string& local_ip 
         );
 
+        friend int create_connection (
+            connection*& new_connection,
+            const std::string& path
+        );
+
     public:
 
         ~connection (
@@ -119,17 +125,26 @@ namespace dlib
         );
 
         unsigned short get_local_port (
-        ) const {  return connection_local_port; }
+        ) const {  return info.cast_to<inet_info>().connection_local_port; }
 
         unsigned short get_foreign_port ( 
-        ) const { return connection_foreign_port; }
+        ) const { return info.cast_to<inet_info>().connection_foreign_port; }
 
         const std::string& get_local_ip (
-        ) const { return connection_local_ip; }
+        ) const { return info.cast_to<inet_info>().connection_local_ip; }
 
         const std::string& get_foreign_ip (
-        ) const { return connection_foreign_ip; }
+        ) const { return info.cast_to<inet_info>().connection_foreign_ip; }
 
+        const std::string& get_connection_path(
+        ) const {
+            return info.cast_to<unix_info>().connection_path;
+        }
+
+        bool is_inet(
+        ) const {
+            return info.contains<inet_info>();
+        }
         int shutdown_outgoing (
         );
 
@@ -192,13 +207,31 @@ namespace dlib
             return temp;
         }
 
+        struct inet_info {
+            int connection_foreign_port;
+            std::string connection_foreign_ip;
+            int connection_local_port;
+            std::string connection_local_ip;
+
+            inet_info(int foreign_port,
+                const std::string& foreign_ip,
+                int local_port,
+                const std::string& local_ip) :
+                connection_foreign_port(foreign_port),
+                connection_foreign_ip(foreign_ip),
+                connection_local_port(local_port),
+                connection_local_ip(local_ip) {}
+        };
+
+        struct unix_info {
+            std::string connection_path;
+
+            unix_info(const std::string& path) : connection_path(path) {}
+        };
 
         // data members
         SOCKET_container& connection_socket;
-        const unsigned short connection_foreign_port;
-        const std::string connection_foreign_ip; 
-        const unsigned short connection_local_port;
-        const std::string connection_local_ip;
+        const type_safe_union<inet_info, unix_info> info;
 
         bool sd;  // called shutdown
         bool sdo; // called shutdown_outgoing
@@ -222,6 +255,17 @@ namespace dlib
                 *this is initialized correctly with the above parameters
         !*/
 
+        connection(
+            SOCKET_container sock,
+            const std::string& path
+        );
+        /*!
+            requires
+                sock is a socket handle and
+                sock is the handle for the connection through path
+            ensures
+                *this is initialized correctly with the above parameters
+        !*/
 
         // restricted functions
         connection(connection&);        // copy constructor
@@ -259,6 +303,16 @@ namespace dlib
             const std::string& ip 
         );
 
+        friend int create_listener (
+            listener*& new_listener,
+            const std::string& path
+        );
+
+        friend int create_listener_from_socket (
+            listener*& new_listener,
+            connection::socket_descriptor_type sock
+        );
+
     public:
 
         ~listener (
@@ -274,19 +328,48 @@ namespace dlib
             unsigned long timeout = 0
         );
 
-        unsigned short get_listening_port (
-        ) { return listening_port; }
+        int get_listening_port(
+        ) const {
+            return info.cast_to<inet_info>().listening_port;
+        }
 
-        const std::string& get_listening_ip (
-        ) { return listening_ip; }
+        const std::string& get_listening_ip(
+        ) const {
+            return info.cast_to<inet_info>().listening_ip;
+        }
+
+        const std::string& get_listening_path(
+        ) const {
+            return info.cast_to<unix_info>().listening_path;
+        }
+
+        bool is_inet(
+        ) const {
+            return info.contains<inet_info>();
+        }
 
     private:
 
+        struct inet_info {
+            std::string listening_ip;
+            int listening_port;
+            bool inaddr_any;
+
+            inet_info(const std::string& ip, int port) :
+                listening_ip(ip),
+                listening_port(port),
+                inaddr_any(ip.empty()) {}
+        };
+
+        struct unix_info {
+            std::string listening_path;
+
+            unix_info(const std::string& path) : listening_path(path) {}
+        };
+
         // data members
         SOCKET_container& listening_socket;
-        const unsigned short listening_port;
-        const std::string listening_ip;
-        const bool inaddr_any;
+        const type_safe_union<inet_info, unix_info> info;
 
         listener(
             SOCKET_container sock,
@@ -302,6 +385,17 @@ namespace dlib
                 *this is initialized correctly with the above parameters
         !*/
 
+        listener(
+            SOCKET_container sock,
+            const std::string& path
+        );
+        /*!
+            requires
+                sock is a socket handle                                             and
+                sock is listening on path
+            ensures
+                *this is initialized correctly with the above parameters
+        !*/
 
         // restricted functions
         listener(listener&);        // copy constructor
@@ -310,10 +404,31 @@ namespace dlib
 
 // ----------------------------------------------------------------------------------------
 
+    int create_listening_socket (
+        connection::socket_descriptor_type& sock,
+        unsigned short port,
+        const std::string& ip
+    );
+
+    int create_listening_socket (
+        connection::socket_descriptor_type& sock,
+        const std::string& path
+    );
+
     int create_listener (
         listener*& new_listener,
         unsigned short port,
         const std::string& ip = ""
+    );
+
+    int create_listener (
+        listener*& new_listener,
+        const std::string& path
+    );
+
+    int create_listener_from_socket (
+        listener*& new_listener,
+        connection::socket_descriptor_type sock
     );
 
     int create_connection ( 
@@ -330,12 +445,27 @@ namespace dlib
         const std::string& ip = ""
     );
 
+    int create_listener (
+        std::unique_ptr<listener>& new_listener,
+        const std::string& path
+    );
+
+    int create_listener_from_socket (
+        std::unique_ptr<listener>& new_listener,
+        connection::socket_descriptor_type sock
+    );
+
     int create_connection ( 
         std::unique_ptr<connection>& new_connection,
         unsigned short foreign_port, 
         const std::string& foreign_ip, 
         unsigned short local_port = 0,
         const std::string& local_ip = ""
+    );
+
+    int create_connection (
+        std::unique_ptr<connection>& new_connection,
+        const std::string& path
     );
 
 // ----------------------------------------------------------------------------------------

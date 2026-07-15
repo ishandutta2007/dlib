@@ -93,6 +93,54 @@ namespace dlib
 // ----------------------------------------------------------------------------------------
 // ----------------------------------------------------------------------------------------    
 
+    int create_listening_socket (
+        connection::socket_descriptor_type& sock,
+        unsigned short port,
+        const std::string& ip
+    );
+    /*!
+        requires
+            - 0 <= port <= 65535
+        ensures
+            - if (#create_listening_socket() == 0) then
+                - #sock == a socket object that is listening on
+                  the specified port and ip for an incoming connection
+                - if (ip == "") then
+                    - the new socket will be listening on all interfaces
+                - if (port == 0) then
+                    - the operating system will assign a free port to listen on
+
+            - returns 0 if create_listening_socket was successful
+            - returns PORTINUSE if the specified local port was already in use
+            - returns OTHER_ERROR if some other error occurred
+    !*/
+
+    int create_listening_socket (
+        connection::socket_descriptor_type& sock,
+        const std::string& path
+    );
+    /*!
+        requires
+            - path.empty() == false
+        ensures
+            - path identifies the local filesystem pathname used as the address
+              of a Unix domain socket.  A client connects by passing this same
+              pathname to create_connection().
+            - this function does not remove an existing file or socket at path.
+              If path is already in use, or if the operating system can't create
+              a Unix domain socket address at path, this function returns
+              OTHER_ERROR.
+            - if (#create_listening_socket() == 0) then
+                - #sock == a socket object that is listening on
+                  the Unix domain socket address named by path for an incoming
+                  connection
+
+            - returns 0 if create_listening_socket was successful
+            - returns OTHER_ERROR if path is too long for the platform's unix
+              socket address structure
+            - returns OTHER_ERROR if some other error occurred
+    !*/
+
     int create_listener (
         listener*& new_listener,
         unsigned short port,
@@ -120,6 +168,67 @@ namespace dlib
         std::unique_ptr<listener>& new_listener,
         unsigned short port,
         const std::string& ip = ""
+    );
+    /*!
+        This function is just an overload of the above function but it gives you a
+        std::unique_ptr smart pointer instead of a C pointer.
+    !*/
+
+    int create_listener (
+        listener*& new_listener,
+        const std::string& path
+    );
+    /*!
+        requires
+            - path.empty() == false
+        ensures
+            - path identifies the local filesystem pathname used as the address
+              of a Unix domain socket.  A client connects by passing this same
+              pathname to create_connection().
+            - this function does not remove an existing file or socket at path.
+              If path is already in use, or if the operating system can't create
+              a Unix domain socket address at path, this function returns
+              OTHER_ERROR.
+            - if (#create_listener() == 0) then
+                - #new_listener == a pointer to a listener object that is listening on
+                  the Unix domain socket address named by path for an incoming
+                  connection
+
+            - returns 0 if create_listener was successful
+            - returns OTHER_ERROR if path is too long for the platform's unix
+              socket address structure
+            - returns OTHER_ERROR if some other error occurred
+    !*/
+
+    int create_listener (
+        std::unique_ptr<listener>& new_listener,
+        const std::string& path
+    );
+    /*!
+        This function is just an overload of the above function but it gives you a
+        std::unique_ptr smart pointer instead of a C pointer.
+    !*/
+
+    int create_listener_from_socket (
+        listener*& new_listener,
+        connection::socket_descriptor_type sock
+    );
+    /*!
+        requires
+            - sock is either a TCP/IP socket or a Unix socket
+            - sock is bound and configured to listening state
+        ensures
+            - if (#create_listener_from_socket() == 0) then
+                - #new_listener == a pointer to a listener object that is listening on
+                  the specified socket for an incoming connection
+
+            - returns 0 if create_listener_from_socket was successful
+            - returns OTHER_ERROR if some other error occurred
+    !*/
+
+    int create_listener_from_socket (
+        std::unique_ptr<listener>& new_listener,
+        connection::socket_descriptor_type sock
     );
     /*!
         This function is just an overload of the above function but it gives you a
@@ -159,6 +268,37 @@ namespace dlib
         const std::string& foreign_ip, 
         unsigned short local_port = 0,
         const std::string& local_ip = ""
+    );
+    /*!
+        This function is just an overload of the above function but it gives you a
+        std::unique_ptr smart pointer instead of a C pointer.
+    !*/
+
+    int create_connection (
+        connection*& new_connection,
+        const std::string& path
+    );
+    /*!
+        requires
+            - path.empty() == false
+        ensures
+            - path identifies the local filesystem pathname used as the address
+              of a Unix domain socket.  It should be the same pathname that was
+              used to create the listening Unix domain socket.
+            - if (#create_connection() == 0) then
+                - #new_connection  == a pointer to a connection object that is connected
+                  to the Unix domain socket address named by path
+                - #new_connection->user_data == 0
+
+            - returns 0 if create_connection was successful
+            - returns OTHER_ERROR if path is too long for the platform's unix
+              socket address structure
+            - returns OTHER_ERROR if some other error occurred
+        !*/
+
+    int create_connection (
+        std::unique_ptr<connection>& new_connection,
+        const std::string& path
     );
     /*!
         This function is just an overload of the above function but it gives you a
@@ -307,6 +447,8 @@ namespace dlib
         unsigned short get_local_port (
         ) const;
         /*!
+            requires
+                - is_inet() == true
             ensures
                 - returns the local port number for this connection
         !*/
@@ -314,6 +456,8 @@ namespace dlib
         unsigned short get_foreign_port ( 
         ) const;
         /*!
+            requires
+                - is_inet() == true
             ensures
                 - returns the foreign port number for this connection
         !*/
@@ -321,6 +465,8 @@ namespace dlib
         const std::string& get_local_ip (
         ) const;
         /*!
+            requires
+                - is_inet() == true
             ensures
                 - returns the IP of the local interface this connection is using
         !*/
@@ -328,8 +474,27 @@ namespace dlib
         const std::string& get_foreign_ip (
         ) const;
         /*!
+            requires
+                - is_inet() == true
             ensures
                 - returns the IP of the foreign host for this connection
+        !*/
+
+        const std::string& get_connection_path (
+        ) const;
+        /*!
+            requires
+                - is_inet() == false
+            ensures
+                - returns the filesystem pathname that was used as the Unix
+                  domain socket address for this connection
+        !*/
+
+        bool is_inet (
+        ) const;
+        /*!
+            ensures
+                - returns true if the connection is using a TCP/IP socket
         !*/
 
         int shutdown (
@@ -407,9 +572,10 @@ namespace dlib
     {
         /*!
             WHAT THIS OBJECT REPRESENTS
-                This object represents a TCP socket waiting for incoming connections.
+                This object represents a TCP socket or Unix domain socket waiting
+                for incoming connections.
                 Calling accept returns a pointer to any new incoming connections on its
-                port.
+                port or Unix domain socket pathname.
 
                 Instances of this class can only be created by using the 
                 create_listener function defined below.
@@ -470,6 +636,8 @@ namespace dlib
         unsigned short get_listening_port (
         ) const;
         /*!
+            requires
+                - is_inet() == true
             ensures
                 - returns the port number that this object is listening on
         !*/
@@ -477,10 +645,29 @@ namespace dlib
         const std::string& get_listening_ip (
         ) const;
         /*!
+            requires
+                - is_inet() == true
             ensures
                 - returns a string containing the IP (e.g. "127.0.0.1") of the 
                   interface this object is listening on 
                 - returns "" if it is accepting connections on all interfaces
+        !*/
+
+        const std::string& get_listening_path (
+        ) const;
+        /*!
+            requires
+                - is_inet() == false
+            ensures
+                - returns the filesystem pathname that was used as the Unix
+                  domain socket address for this listener
+        !*/
+
+        bool is_inet (
+        ) const;
+        /*!
+            ensures
+                - returns true if listening on a TCP/IP socket
         !*/
 
     private:
@@ -492,4 +679,3 @@ namespace dlib
 }
 
 #endif // DLIB_SOCKETS_KERNEl_ABSTRACT_
-

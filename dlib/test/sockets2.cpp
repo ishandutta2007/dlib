@@ -2,6 +2,7 @@
 // License: Boost Software License   See LICENSE.txt for the full license.
 
 #include <algorithm>
+#include <cstdio>
 #include <memory>
 
 #include "tester.h"
@@ -22,6 +23,13 @@ namespace
     // should start with "test."
     dlib::logger dlog("test.sockets2");
 
+    const std::string socket_name = "dlib-test-socket";
+
+    void remove_test_socket (
+    )
+    {
+        std::remove(socket_name.c_str());
+    }
 
     class sockets2_tester : public tester, private multithreaded_object 
     {
@@ -33,15 +41,27 @@ namespace
 
         short port_num;
         string data_to_send;
+        bool test_unix;
+        bool test_user_sock;
 
         bool test_failed;
+
+        connection *get_connection(
+        )
+        {
+            if (test_unix) {
+                return connect(socket_name);
+            } else {
+                return connect("127.0.0.1", port_num);
+            }
+        }
 
         void write_thread (
         )
         {
             try
             {
-                std::unique_ptr<connection> con(connect("127.0.0.1", port_num));
+                std::unique_ptr<connection> con(get_connection());
 
                 // Send a copy of the data down the connection so we can test our the read() function
                 // that uses timeouts in the main thread.
@@ -65,7 +85,7 @@ namespace
         {
             try
             {
-                std::unique_ptr<connection> con(connect("127.0.0.1", port_num));
+                std::unique_ptr<connection> con(get_connection());
 
                 // just do nothing until the connection closes
                 char ch;
@@ -96,11 +116,49 @@ namespace
             register_thread(*this, &sockets2_tester::no_write_thread);
         }
 
+        ~sockets2_tester (
+        )
+        {
+            remove_test_socket();
+        }
+
         void perform_test (
         )
         {
+            test_bad_unix_socket_paths();
+
+            test_unix = false;
+            test_user_sock = false;
             run_tests(0);
             run_tests(40);
+
+            test_unix = true;
+            test_user_sock = false;
+            run_tests(0);
+            run_tests(40);
+
+            test_unix = false;
+            test_user_sock = true;
+            run_tests(0);
+            run_tests(40);
+
+            test_unix = true;
+            test_user_sock = true;
+            run_tests(0);
+            run_tests(40);
+
+        }
+
+        void test_bad_unix_socket_paths (
+        )
+        {
+            const std::string long_socket_name(1000, 'x');
+            connection::socket_descriptor_type sock = 0;
+            connection* con = 0;
+
+            DLIB_TEST(create_listening_socket(sock, long_socket_name) == OTHER_ERROR);
+            DLIB_TEST(create_connection(con, long_socket_name) == OTHER_ERROR);
+            DLIB_TEST(con == 0);
         }
 
         void run_tests (
@@ -109,6 +167,8 @@ namespace
         {
             // make sure there aren't any threads running
             wait();
+            if (test_unix)
+                remove_test_socket();
 
             port_num = 5000;
             test_failed = false;
@@ -121,9 +181,23 @@ namespace
 
             dlog << LINFO << "data block size: " << data_to_send.size();
 
-
+            connection::socket_descriptor_type sock = 0;
             std::unique_ptr<listener> list;
-            DLIB_TEST(create_listener(list, port_num, "127.0.0.1") == 0);
+            if (test_unix) {
+                if (test_user_sock) {
+                    DLIB_TEST(create_listening_socket(sock, socket_name) == 0);
+                    DLIB_TEST(create_listener_from_socket(list, sock) == 0);
+                } else {
+                    DLIB_TEST(create_listener(list, socket_name) == 0);
+                }
+            } else {
+                if (test_user_sock) {
+                    DLIB_TEST(create_listening_socket(sock, port_num, "127.0.0.1") == 0);
+                    DLIB_TEST(create_listener_from_socket(list, sock) == 0);
+                } else {
+                    DLIB_TEST(create_listener(list, port_num, "127.0.0.1") == 0);
+                }
+            }
             DLIB_TEST(bool(list));
 
             // kick off the sending threads
@@ -190,6 +264,8 @@ namespace
 
             // wait for all the sending threads to terminate
             wait();
+            if (test_unix)
+                remove_test_socket();
         }
     };
 
@@ -200,5 +276,3 @@ namespace
     sockets2_tester a;
 
 }
-
-
