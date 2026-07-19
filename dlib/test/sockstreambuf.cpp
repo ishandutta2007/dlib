@@ -5,6 +5,7 @@
 #include <cstdlib>
 #include <sstream>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include <ctime>
@@ -228,6 +229,97 @@ namespace
 
 // ----------------------------------------------------------------------------------------
 
+    void sockstreambuf_custom_buffer_test (
+    )
+    {
+        listener* raw_list = 0;
+        DLIB_TEST(create_listener(raw_list, 0) == 0);
+        std::unique_ptr<listener> list(raw_list);
+
+        const string input = "abcdef";
+        const string output = "uvwxyz";
+        string received_output;
+        int accept_result = OTHER_ERROR;
+        long write_result = OTHER_ERROR;
+        long read_result = 0;
+
+        std::thread server([&]()
+        {
+            connection* raw_con = 0;
+            accept_result = list->accept(raw_con, 5000);
+            std::unique_ptr<connection> con(raw_con);
+            if (accept_result != 0)
+                return;
+
+            write_result = con->write(input.data(), input.size());
+            if (write_result != static_cast<long>(input.size()))
+                return;
+
+            while (received_output.size() < output.size())
+            {
+                char buf[10];
+                read_result = con->read(buf, output.size()-received_output.size(), 5000);
+                if (read_result <= 0)
+                    return;
+                received_output.append(buf, read_result);
+            }
+        });
+
+        connection* raw_con = 0;
+        const int connect_result = create_connection(
+            raw_con,
+            list->get_listening_port(),
+            "127.0.0.1"
+        );
+        std::unique_ptr<connection> con(raw_con);
+
+        vector<sockstreambuf::int_type> read_values;
+        bool output_stream_good = false;
+        if (connect_result == 0)
+        {
+            sockstreambuf buf(con, 1, 5, 3);
+
+            read_values.push_back(buf.sbumpc()); // a
+            read_values.push_back(buf.sbumpc()); // b
+            read_values.push_back(buf.sbumpc()); // c
+            read_values.push_back(buf.sbumpc()); // d
+            read_values.push_back(buf.sgetc());  // e, and refill the input buffer
+            read_values.push_back(buf.sungetc());
+            read_values.push_back(buf.sungetc());
+            read_values.push_back(buf.sungetc());
+            read_values.push_back(buf.sungetc());
+            read_values.push_back(buf.sbumpc());
+            read_values.push_back(buf.sbumpc());
+            read_values.push_back(buf.sbumpc());
+            read_values.push_back(buf.sbumpc());
+            read_values.push_back(buf.sbumpc());
+
+            ostream out(&buf);
+            for (char ch : output)
+                out.put(ch);
+            out.flush();
+            output_stream_good = out.good();
+        }
+
+        server.join();
+
+        DLIB_TEST(connect_result == 0);
+        DLIB_TEST(accept_result == 0);
+        DLIB_TEST(write_result == static_cast<long>(input.size()));
+        DLIB_TEST(read_result > 0);
+        DLIB_TEST(output_stream_good);
+        DLIB_TEST(received_output == output);
+
+        const vector<sockstreambuf::int_type> expected_values = {
+            'a', 'b', 'c', 'd', 'e', 'd', 'c', 'b',
+            sockstreambuf::traits_type::eof(),
+            'b', 'c', 'd', 'e', 'f'
+        };
+        DLIB_TEST(read_values == expected_values);
+    }
+
+// ----------------------------------------------------------------------------------------
+
 
     class sockstreambuf_tester : public tester
     {
@@ -243,6 +335,7 @@ namespace
         {
             dlog << LINFO << "testing sockstreambuf";
             sockstreambuf_test<sockstreambuf>();
+            sockstreambuf_custom_buffer_test();
             dlog << LINFO << "testing sockstreambuf_unbuffered";
             sockstreambuf_test<sockstreambuf_unbuffered>();
         }

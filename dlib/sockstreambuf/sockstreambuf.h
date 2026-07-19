@@ -4,7 +4,10 @@
 #define DLIB_SOCKStREAMBUF_Hh_
 
 #include <iosfwd>
+#include <limits>
+#include <memory>
 #include <streambuf>
+#include "../assert.h"
 #include "../sockets.h"
 #include "sockstreambuf_abstract.h"
 #include "sockstreambuf_unbuffered.h"
@@ -36,33 +39,46 @@ namespace dlib
         typedef sockstreambuf kernel_2a;
 
         sockstreambuf (
-            connection* con_
+            connection* con_,
+            std::streamsize out_buffer_size_ = 10000,
+            std::streamsize in_buffer_size_ = 10000,
+            std::streamsize max_putback_ = 4
         ) :
             con(*con_),
-            out_buffer(0),
-            in_buffer(0),
+            out_buffer_size(out_buffer_size_),
+            in_buffer_size(in_buffer_size_),
+            max_putback(max_putback_),
             autoflush(false)
         {
+            DLIB_ASSERT(0 < out_buffer_size && out_buffer_size <= std::numeric_limits<int>::max(),
+                "out_buffer_size must be in the range (0, INT_MAX]");
+            DLIB_ASSERT(0 < in_buffer_size && in_buffer_size <= std::numeric_limits<int>::max(),
+                "in_buffer_size must be in the range (0, INT_MAX]");
+            DLIB_ASSERT(0 <= max_putback && max_putback < in_buffer_size,
+                "max_putback must be in the range [0, in_buffer_size)");
+
+            out_buffer.reset(new char[static_cast<size_t>(out_buffer_size)]);
+            in_buffer.reset(new char[static_cast<size_t>(in_buffer_size)]);
             init();
         }
 
         sockstreambuf (
-            const std::unique_ptr<connection>& con_
-        ) :
-            con(*con_),
-            out_buffer(0),
-            in_buffer(0),
-            autoflush(false)
-        {
-            init();
-        }
+            const std::unique_ptr<connection>& con_,
+            std::streamsize out_buffer_size_ = 10000,
+            std::streamsize in_buffer_size_ = 10000,
+            std::streamsize max_putback_ = 4
+        ) : sockstreambuf(
+                con_.get(),
+                out_buffer_size_,
+                in_buffer_size_,
+                max_putback_
+            )
+        {}
 
         virtual ~sockstreambuf (
         )
         {
             sync();
-            delete [] out_buffer;
-            delete [] in_buffer;
         }
 
         connection* get_connection (
@@ -88,27 +104,17 @@ namespace dlib
         void init (
         )
         {
-            try
-            {
-                out_buffer = new char[out_buffer_size];
-                in_buffer = new char[in_buffer_size];
-            }
-            catch (...)
-            {
-                if (out_buffer) delete [] out_buffer;
-                throw;
-            }
-            setp(out_buffer, out_buffer + (out_buffer_size-1));
-            setg(in_buffer+max_putback, 
-                 in_buffer+max_putback, 
-                 in_buffer+max_putback);
+            setp(out_buffer.get(), out_buffer.get() + (out_buffer_size-1));
+            setg(in_buffer.get()+max_putback,
+                 in_buffer.get()+max_putback,
+                 in_buffer.get()+max_putback);
         }
 
         int flush_out_buffer (
         )
         {
             int num = static_cast<int>(pptr()-pbase());
-            if (con.write(out_buffer,num) != num)
+            if (con.write(out_buffer.get(),num) != num)
             {
                 // the write was not successful so return EOF 
                 return EOF;
@@ -151,11 +157,11 @@ namespace dlib
 
         // member data
         connection&  con;
-        static const std::streamsize max_putback = 4;
-        static const std::streamsize out_buffer_size = 10000;
-        static const std::streamsize in_buffer_size = 10000;
-        char* out_buffer;
-        char* in_buffer;
+        const std::streamsize out_buffer_size;
+        const std::streamsize in_buffer_size;
+        const std::streamsize max_putback;
+        std::unique_ptr<char[]> out_buffer;
+        std::unique_ptr<char[]> in_buffer;
         bool autoflush;
     
     };

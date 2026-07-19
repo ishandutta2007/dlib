@@ -107,7 +107,7 @@ namespace dlib
         }
 
         // copy the putback characters into the putback end of the in_buffer
-        std::memmove(in_buffer+(max_putback-num_put_back), gptr()-num_put_back, num_put_back);
+        std::memmove(in_buffer.get()+(max_putback-num_put_back), gptr()-num_put_back, num_put_back);
 
         if (flushes_output_on_read())
         {
@@ -118,7 +118,7 @@ namespace dlib
             }
         }
 
-        int num = con.read(in_buffer+max_putback, in_buffer_size-max_putback);
+        int num = con.read(in_buffer.get()+max_putback, in_buffer_size-max_putback);
         if (num <= 0)
         {
             // an error occurred or the connection is over which is EOF
@@ -126,9 +126,9 @@ namespace dlib
         }
 
         // reset in_buffer pointers
-        setg (in_buffer+(max_putback-num_put_back),
-              in_buffer+max_putback,
-              in_buffer+max_putback+num);
+        setg (in_buffer.get()+(max_putback-num_put_back),
+              in_buffer.get()+max_putback,
+              in_buffer.get()+max_putback+num);
 
         return static_cast<unsigned char>(*gptr());
     }

@@ -49,27 +49,51 @@ namespace dlib
         !*/
     public:
         sockstreambuf (
-            connection* con
+            connection* con,
+            std::streamsize out_buffer_size = 10000,
+            std::streamsize in_buffer_size = 10000,
+            std::streamsize max_putback = 4
         );
         /*!
             requires
                 - con == a valid connection object
+                - out_buffer_size > 0
+                - out_buffer_size <= std::numeric_limits<int>::max()
+                - in_buffer_size > 0
+                - in_buffer_size <= std::numeric_limits<int>::max()
+                - max_putback >= 0
+                - max_putback < in_buffer_size
             ensures
                 - *this will read from and write to con
                 - #flushes_output_on_read() == false
+                - out_buffer_size bytes are allocated for the internal output buffer
+                - in_buffer_size bytes are used to buffer input, with max_putback of those
+                  bytes reserved for putback characters
             throws
                 - std::bad_alloc
         !*/
 
         sockstreambuf (
-            const std::unique_ptr<connection>& con
+            const std::unique_ptr<connection>& con,
+            std::streamsize out_buffer_size = 10000,
+            std::streamsize in_buffer_size = 10000,
+            std::streamsize max_putback = 4
         );
         /*!
             requires
                 - con == a valid connection object
+                - out_buffer_size > 0
+                - out_buffer_size <= std::numeric_limits<int>::max()
+                - in_buffer_size > 0
+                - in_buffer_size <= std::numeric_limits<int>::max()
+                - max_putback >= 0
+                - max_putback < in_buffer_size
             ensures
                 - *this will read from and write to con
                 - #flushes_output_on_read() == false
+                - out_buffer_size bytes are allocated for the internal output buffer
+                - in_buffer_size bytes are used to buffer input, with max_putback of those
+                  bytes reserved for putback characters
             throws
                 - std::bad_alloc
         !*/
